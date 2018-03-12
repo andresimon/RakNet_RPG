@@ -6,77 +6,41 @@
 #include <thread>
 #include <chrono>
 #include <map>
+#include <mutex>
+#include <conio.h>
+#include <sstream>
+
+#include "Common.h"
+#include "CharacterClass.h"
+#include "WarriorClass.h"
+#include "RogueClass.h"
+#include "ClericClass.h"
 
 static unsigned int SERVER_PORT = 65000;
-static unsigned int CLIENT_PORT = 65001;
-static unsigned int MAX_CONNECTIONS = 4;
+static unsigned int const MAX_CONNECTIONS = 2; //4
 
-enum NetworkState
-{
-	NS_Init = 0,
-	NS_PendingStart,
-	NS_Started,
-	NS_Lobby,
-	NS_Pending,
-};
-
-bool isServer = false;
+bool isServer = true;
 bool isRunning = true;
+bool isDefineTurn = true; // Tells the server to start a new player's turn
 
 RakNet::RakPeerInterface *g_rakPeerInterface = nullptr;
 RakNet::SystemAddress g_serverAddress;
 
+std::mutex g_networkState_mutex;
 NetworkState g_networkState = NS_Init;
 
-enum {
-	ID_THEGAME_LOBBY_READY = ID_USER_PACKET_ENUM,
-	ID_THEGAME_START,
-};
-
-struct SPlayer
-{
-	std::string name;
-};
-
 std::map<unsigned long, SPlayer> m_players;
+RakNet::RakNetGUID playersIDs[MAX_CONNECTIONS];
 
-//server
-void OnIncomingConnection(RakNet::Packet* packet)
+unsigned int const		numPlayersRequired  = MAX_CONNECTIONS;
+static unsigned int		numPlayersConnected = 0;
+
+SPlayer& GetPlayer(RakNet::RakNetGUID raknetId)
 {
-	//must be server in order to recieve connection
-	assert(isServer);
-	m_players.insert(std::make_pair(RakNet::RakNetGUID::ToUint32(packet->guid), SPlayer()));
-	std::cout << "Total Players: " << m_players.size() << std::endl;
-}
-
-//client
-void OnConnectionAccepted(RakNet::Packet* packet)
-{
-	//server should not ne connecting to anybody, 
-	//clients connect to server
-	assert(!isServer);
-
-	g_networkState = NS_Lobby;
-	g_serverAddress = packet->systemAddress;
-}
-
-void OnLobbyReady(RakNet::Packet* packet)
-{
-	unsigned long guid = RakNet::RakNetGUID::ToUint32(packet->guid);
+	unsigned long guid = RakNet::RakNetGUID::ToUint32(raknetId);
 	std::map<unsigned long, SPlayer>::iterator it = m_players.find(guid);
-	//somehow player didn't connect but now is in lobby ready
 	assert(it != m_players.end());
-
-	RakNet::BitStream bs(packet->data, packet->length, false);
-	RakNet::MessageID messageId;
-	bs.Read(messageId);
-	RakNet::RakString userName;
-	bs.Read(userName);
-
-	SPlayer& player = it->second;
-	player.name = userName;
-	std::cout << userName.C_String() << " aka " << player.name.c_str() << " IS READY!!!!!" << std::endl;
-
+	return it->second;
 }
 
 unsigned char GetPacketIdentifier(RakNet::Packet *packet)
@@ -93,6 +57,263 @@ unsigned char GetPacketIdentifier(RakNet::Packet *packet)
 		return (unsigned char)packet->data[0];
 }
 
+void ShowHeader()
+{
+	cls();
+
+	std::cout << "RakNet RPG Server" << std::endl;
+	std::cout << std::endl;
+
+
+//	if (g_networkState == NS_WaitingPlayers)
+	//{
+		for (unsigned int x = 1; x <= MAX_CONNECTIONS; x++)
+		{
+			std::string chosenClass = "WAITING";
+
+			if (RakNet::RakNetGUID::ToUint32(playersIDs[x - 1]) != NULL)
+			{
+				SPlayer& player = GetPlayer(playersIDs[x - 1]);
+				if (player.m_class != NULL)
+					chosenClass = CharacterClass::GetCharacterClassName(player.m_class);
+
+				std::cout << "Player " << player.m_number << " connected, Class: " << chosenClass << std::endl;
+			}
+			else
+			{
+				std::cout << "Player " << x << " WAITING..." << std::endl;
+			}
+		}
+	//}
+}
+
+std::string GetPlayerStats()
+{
+	std::stringstream ss;
+
+	ss << std::endl;
+
+		//player 1 - warrior - 100 hp
+		//player 2 - Cleric - 50 hp
+		//player 3 - disconnected
+
+		for (unsigned int x = 0; x < MAX_CONNECTIONS; x++)
+		{
+			if (RakNet::RakNetGUID::ToUint32(playersIDs[x]) != NULL)
+			{
+				SPlayer& player = GetPlayer(playersIDs[x]);
+				ss << "Player " << player.m_number << " - " << player.m_character->GetMyCharacterClassName() << " - " << player.m_character->m_health << " HP" << std::endl;
+			}
+		}
+		
+	return ss.str();
+}
+
+
+void OnLostConnection(RakNet::Packet* packet)
+{
+	std::cout << "Lost connection on Server" << std::endl;
+
+	SPlayer& lostPlayer = GetPlayer(packet->guid);
+	playersIDs[lostPlayer.m_number - 1] = (RakNet::RakNetGUID)0;
+	//numPlayersConnected--;
+	lostPlayer.SendName(RakNet::UNASSIGNED_SYSTEM_ADDRESS, true);
+	unsigned long keyVal = RakNet::RakNetGUID::ToUint32(packet->guid);
+	m_players.erase(keyVal);
+	ShowHeader();
+}
+
+//server
+void OnIncomingConnection(RakNet::Packet* packet)
+{
+	unsigned int availableSlot = 0;
+	for (unsigned int x = 0; x <= numPlayersRequired - 1; x++)
+	{
+		if (RakNet::RakNetGUID::ToUint32(playersIDs[x]) == 0)
+		{
+			availableSlot = x;
+			break;
+		}
+	}
+
+	//numPlayersConnected++;
+
+	SPlayer& newPlayer = SPlayer();
+	newPlayer.m_number = availableSlot + 1;
+	newPlayer.m_status = PS_Connected;
+	newPlayer.m_address = packet->systemAddress;
+
+	m_players.insert(std::make_pair(RakNet::RakNetGUID::ToUint32(packet->guid), newPlayer));
+	playersIDs[availableSlot] = packet->guid;
+
+	SPlayer& connectedPlayer = GetPlayer(packet->guid);
+	//ShowWaittingPlayers();
+	ShowHeader();
+	//std::cout << "Player " << numPlayersConnected << " connected. Class: " << CharacterClass::GetCharacterClassName(connectedPlayer.m_class) << std::endl;
+}
+
+
+
+//this is on the client side
+void DisplayPlayerReady(RakNet::Packet* packet)
+{
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	RakNet::RakString userName;
+	bs.Read(userName);
+
+	std::cout << userName.C_String() << " has joined" << std::endl;
+}
+
+bool CheckGameStart()
+{
+	bool isOk = true;
+
+	if (g_networkState == NS_WaitingPlayers)
+	{
+		if (m_players.size() < numPlayersRequired)
+			return false;
+
+		for (std::map<unsigned long, SPlayer>::iterator it = m_players.begin(); it != m_players.end(); ++it)
+		{
+			SPlayer& player = it->second;
+			if (player.m_class == NULL)
+			{
+				//break;
+				return false;
+			}
+		}
+
+		// Notify all player that game has started
+		RakNet::BitStream writeBs;
+		writeBs.Write((RakNet::MessageID)ID_THEGAME_START);
+		std::string _status = GetPlayerStats();
+		RakNet::RakString status(_status.c_str());
+		writeBs.Write(status);
+
+		//assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, g_serverAddress, true));
+		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true));
+		
+		g_networkState_mutex.lock();
+		g_networkState = NS_GameStarted;
+		g_networkState_mutex.unlock();
+
+	}
+}
+
+void OnLobbyReady(RakNet::Packet* packet)
+{
+	EPlayerClass playerClass;
+
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	bs.Read(playerClass);
+
+	unsigned long guid = RakNet::RakNetGUID::ToUint32(packet->guid);
+	SPlayer& player = GetPlayer(packet->guid);
+	player.m_class = playerClass;
+
+	// create the character class object for that player
+	CharacterClass* character;
+
+	switch (playerClass)
+	{
+		case Warrior:
+			character = new WarriorClass(1);
+			player.m_character = character;
+			break;
+
+		case Rogue:
+			character = new RogueClass(1);
+			player.m_character = character;
+			break;
+
+		case Cleric:
+			character = new ClericClass(1);
+			player.m_character = character;
+			break;
+
+		default:
+			break;
+	}
+
+	ShowHeader();
+
+	//notify all other connected players that this plyer has joined the game
+	for (std::map<unsigned long, SPlayer>::iterator it = m_players.begin(); it != m_players.end(); ++it)
+	{
+		//skip over the player who just joined
+		if (guid == it->first)
+		{
+			continue;
+		}
+
+		SPlayer& player = it->second;
+		player.SendName(packet->systemAddress, false);
+		/*RakNet::BitStream writeBs;
+		writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
+		RakNet::RakString name(player.m_name.c_str());
+		writeBs.Write(name);
+
+		//returns 0 when something is wrong
+		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));*/
+	}
+
+	RakNet::BitStream writeBs;
+	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
+//	RakNet::RakString name(player.m_name.c_str());
+	//writeBs.Write(name);
+	writeBs.Write(player.m_number);
+
+	//returns 0 when something is wrong
+	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));
+
+	/*RakNet::BitStream writeBs;
+	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
+	RakNet::RakString name(player.m_name.c_str());
+	writeBs.Write(name);
+
+	//returns 0 when something is wrong
+	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));*/
+	//player.SendName(packet->systemAddress, true);
+	/*RakNet::BitStream writeBs;
+	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
+	RakNet::RakString name(player.m_name.c_str());
+	writeBs.Write(name);
+	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, true));*/
+
+}
+
+void ResolveTurn(RakNet::Packet *packet)
+{
+	SPlayer& player = GetPlayer(packet->guid);
+
+	unsigned char packetIdentifier = GetPacketIdentifier(packet);
+	switch (packetIdentifier)
+	{
+		case ID_PLAYER_ATTACK:
+			//ResolveTurn(packet);
+			std::cout << "Player " << player.m_number << "Attacked" << std::endl;
+			break;
+
+		case ID_PLAYER_DEFEND:
+			//ResolveTurn(packet);
+			std::cout << "Player " << player.m_number << "Defend" << std::endl;
+			break;
+
+		case ID_PLAYER_HEAL:
+			//ResolveTurn(packet);
+			std::cout << "Player " << player.m_number << "heal" << std::endl;
+			break;
+
+		default:
+			break;
+	}
+
+	isDefineTurn = true;
+}
 
 void InputHandler()
 {
@@ -101,32 +322,20 @@ void InputHandler()
 		char userInput[255];
 		if (g_networkState == NS_Init)
 		{
-			std::cout << "press (s) for server (c) for client" << std::endl;
-			std::cin >> userInput;
-			isServer = (userInput[0] == 's');
+			g_networkState_mutex.lock();
 			g_networkState = NS_PendingStart;
-		}
-		else if (g_networkState == NS_Lobby)
-		{
-			std::cout << "Enter your name to play or type quit to leave" << std::endl;
-			std::cin >> userInput;
-			//quitting is not acceptable in our game, create a crash to teach lesson
-			assert(strcmp(userInput, "quit"));
+			g_networkState_mutex.unlock();
 
-			RakNet::BitStream bs;
-			bs.Write((RakNet::MessageID)ID_THEGAME_LOBBY_READY);
-			RakNet::RakString name(userInput);
-			bs.Write(name);
-
-			//returns 0 when something is wrong
-			assert(g_rakPeerInterface->Send(&bs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, g_serverAddress, false));
-			g_networkState = NS_Pending;
 		}
 		else if (g_networkState == NS_Pending)
 		{
-			std::cout << "pending..." << std::endl;
+			static bool doOnce = false;
+			if (!doOnce)
+				std::cout << "pending..." << std::endl;
+
+			doOnce = true;
 		}
-		std::this_thread::sleep_for(std::chrono::microseconds(100));
+		std::this_thread::sleep_for(std::chrono::microseconds(1));
 	}
 }
 
@@ -157,15 +366,13 @@ bool HandleLowLevelPackets(RakNet::Packet* packet)
 		printf("ID_REMOTE_CONNECTION_LOST\n");
 		break;
 	case ID_NEW_INCOMING_CONNECTION:
+		//client connecting to server
 		OnIncomingConnection(packet);
-		printf("ID_NEW_INCOMING_CONNECTION\n");
+		//printf("ID_NEW_INCOMING_CONNECTION\n");
 		break;
 	case ID_REMOTE_NEW_INCOMING_CONNECTION: // Server telling the clients of another client connecting.  You can manually broadcast this in a peer to peer enviroment if you want.
 		OnIncomingConnection(packet);
-		printf("ID_REMOTE_NEW_INCOMING_CONNECTION\n");
-		break;
-	case ID_CONNECTION_BANNED: // Banned from this server
-		printf("We are banned from this server.\n");
+		//printf("ID_REMOTE_NEW_INCOMING_CONNECTION\n");
 		break;
 	case ID_CONNECTION_ATTEMPT_FAILED:
 		printf("Connection attempt failed\n");
@@ -176,22 +383,13 @@ bool HandleLowLevelPackets(RakNet::Packet* packet)
 		printf("ID_NO_FREE_INCOMING_CONNECTIONS\n");
 		break;
 
-	case ID_INVALID_PASSWORD:
-		printf("ID_INVALID_PASSWORD\n");
-		break;
-
 	case ID_CONNECTION_LOST:
 		// Couldn't deliver a reliable packet - i.e. the other system was abnormally
 		// terminated
 		printf("ID_CONNECTION_LOST\n");
+		OnLostConnection(packet);
 		break;
 
-	case ID_CONNECTION_REQUEST_ACCEPTED:
-		// This tells the client they have connected
-		printf("ID_CONNECTION_REQUEST_ACCEPTED to %s with GUID %s\n", packet->systemAddress.ToString(true), packet->guid.ToString());
-		printf("My external address is %s\n", g_rakPeerInterface->GetExternalID(packet->systemAddress).ToString(true));
-		OnConnectionAccepted(packet);
-		break;
 	case ID_CONNECTED_PING:
 	case ID_UNCONNECTED_PING:
 		printf("Ping from %s\n", packet->systemAddress.ToString(true));
@@ -215,19 +413,28 @@ void PacketHandler()
 				unsigned char packetIdentifier = GetPacketIdentifier(packet);
 				switch (packetIdentifier)
 				{
-				case ID_THEGAME_LOBBY_READY:
-					OnLobbyReady(packet);
-					break;
-				default:
-					break;
+					case ID_THEGAME_LOBBY_READY:
+						OnLobbyReady(packet);
+						break;
+
+					case ID_PLAYER_READY:
+						DisplayPlayerReady(packet);
+						break;
+
+					case ID_PLAYER_ATTACK:
+					case ID_PLAYER_DEFEND:
+					case ID_PLAYER_HEAL:
+						ResolveTurn(packet);
+						break;
+
+					default:
+						break;
 				}
 			}
 		}
 
-		std::this_thread::sleep_for(std::chrono::microseconds(100));
+		std::this_thread::sleep_for(std::chrono::microseconds(1));
 	}
-
-
 }
 
 int main()
@@ -237,49 +444,94 @@ int main()
 	std::thread inputHandler(InputHandler);
 	std::thread packetHandler(PacketHandler);
 
+	unsigned int lastPlayerTurn = 0;
+
 	while (isRunning)
 	{
-		if (g_networkState == NS_PendingStart)
+		if (g_networkState == NS_Init)
 		{
-			if (isServer)
-			{
-				RakNet::SocketDescriptor socketDescriptors[1];
-				socketDescriptors[0].port = SERVER_PORT;
-				socketDescriptors[0].socketFamily = AF_INET; // Test out IPV4
+			g_networkState_mutex.lock();
+			g_networkState = NS_PendingStart;
+			g_networkState_mutex.unlock();
 
-				bool isSuccess = g_rakPeerInterface->Startup(MAX_CONNECTIONS, socketDescriptors, 1) == RakNet::RAKNET_STARTED;
-				assert(isSuccess);
-				//ensures we are server
+		}
+		else if (g_networkState == NS_PendingStart)
+		{
+			RakNet::SocketDescriptor socketDescriptors[1];
+			socketDescriptors[0].port = SERVER_PORT;
+			socketDescriptors[0].socketFamily = AF_INET; // Test out IPV4
+
+			bool isSuccess = g_rakPeerInterface->Startup(MAX_CONNECTIONS, socketDescriptors, 1) == RakNet::RAKNET_STARTED;
+			assert(isSuccess);
+
+			if (isSuccess)
+			{
 				g_rakPeerInterface->SetMaximumIncomingConnections(MAX_CONNECTIONS);
-				std::cout << "server started" << std::endl;
+				/*std::cout << "server started" << std::endl;
+				g_networkState_mutex.lock();
 				g_networkState = NS_Started;
+				g_networkState_mutex.unlock();
+				*/
+				g_networkState_mutex.lock();
+				g_networkState = NS_WaitingPlayers;
+				g_networkState_mutex.unlock();
+					
+				std::cout << "RakNet RPG Server started!!!" << std::endl;
+				std::cout << "Waitting for " << numPlayersRequired << " players." << std::endl;
 			}
-			//client
-			else
+		
+		}
+		else if (g_networkState == NS_WaitingPlayers)
+		{
+			CheckGameStart();
+		}
+		else if (g_networkState == NS_GameStarted)
+		{
+			if (isDefineTurn)
 			{
-				RakNet::SocketDescriptor socketDescriptor(CLIENT_PORT, 0);
-				socketDescriptor.socketFamily = AF_INET;
+				lastPlayerTurn++;
+				if (lastPlayerTurn > m_players.size())
+					lastPlayerTurn = 1;
 
-				while (RakNet::IRNS2_Berkley::IsPortInUse(socketDescriptor.port, socketDescriptor.hostAddress, socketDescriptor.socketFamily, SOCK_DGRAM) == true)
-					socketDescriptor.port++;
+				// Get a valid player
+				for ( unsigned int x = lastPlayerTurn - 1; x < playersIDs->size(); x++ )
+				{
+					SPlayer& player = GetPlayer(playersIDs[x]);
+					if (player.m_status == PS_Connected)
+					{
+						lastPlayerTurn = player.m_number;
+						break;
+					}
+				}
 
-				RakNet::StartupResult result = g_rakPeerInterface->Startup(8, &socketDescriptor, 1);
-				assert(result == RakNet::RAKNET_STARTED);
-				g_rakPeerInterface->SetOccasionalPing(true);
-				//"127.0.0.1" = local host = your machines address
-				RakNet::ConnectionAttemptResult car = g_rakPeerInterface->Connect("127.0.0.1", SERVER_PORT, nullptr, 0);
-				RakAssert(car == RakNet::CONNECTION_ATTEMPT_STARTED);
-				std::cout << "client attempted connection..." << std::endl;
-				g_networkState = NS_Started;
+				// Broadcast player's number turn
+				RakNet::BitStream writeBs;
+				writeBs.Write((RakNet::MessageID)ID_PLAYER_TURN);
+				writeBs.Write(lastPlayerTurn);
+				std::string _status = GetPlayerStats();
+				RakNet::RakString status(_status.c_str());
+				writeBs.Write(status);
+				//returns 0 when something is wrong
+				assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true));
+
+				// Player receives a turn start
+				SPlayer& player = GetPlayer(playersIDs[lastPlayerTurn - 1]);
+				RakNet::BitStream writeBs2;
+				writeBs2.Write((RakNet::MessageID)ID_YOUR_TURN);
+				RakNet::RakString name("123");
+				writeBs2.Write(name);
+				//returns 0 when something is wrong
+				assert(g_rakPeerInterface->Send(&writeBs2, HIGH_PRIORITY, RELIABLE_ORDERED, 0, player.m_address, false));
+
+				isDefineTurn = false;
 			}
 		}
-
 	}
 
 	//std::cout << "press q and then return to exit" << std::endl;
 	//std::cin >> userInput;
 
-	inputHandler.join();
+	//inputHandler.join();
 	packetHandler.join();
 	return 0;
 }
