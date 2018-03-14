@@ -18,11 +18,11 @@ class WarriorClass : public CharacterClass
 
 inline WarriorClass::WarriorClass(unsigned int const playerNum)
 {
-	m_number = playerNum;
+	//m_number = playerNum;
 	m_class = Warrior;
 
 	m_healthQuality = High;
-	m_health = GetAttribHealth(m_healthQuality);
+	m_health = GetAttribHealth();
 
 	m_damageQuality  = Medium;
 	m_defenseQuality = Medium;

@@ -9,6 +9,7 @@
 #include <mutex>
 #include <conio.h>
 #include <sstream>
+#include <vector>
 
 #include "Common.h"
 #include "CharacterClass.h"
@@ -17,11 +18,12 @@
 #include "ClericClass.h"
 
 static unsigned int SERVER_PORT = 65000;
-static unsigned int const MAX_CONNECTIONS = 2; //4
+static unsigned int const MAX_CONNECTIONS = 3; 
 
 bool isServer = true;
 bool isRunning = true;
 bool isDefineTurn = true; // Tells the server to start a new player's turn
+unsigned int lastPlayerTurn = 0;
 
 RakNet::RakPeerInterface *g_rakPeerInterface = nullptr;
 RakNet::SystemAddress g_serverAddress;
@@ -32,8 +34,8 @@ NetworkState g_networkState = NS_Init;
 std::map<unsigned long, SPlayer> m_players;
 RakNet::RakNetGUID playersIDs[MAX_CONNECTIONS];
 
-unsigned int const		numPlayersRequired  = MAX_CONNECTIONS;
-static unsigned int		numPlayersConnected = 0;
+unsigned int const	numPlayersRequired  = MAX_CONNECTIONS;
+std::string lastPlayerAction = "";
 
 SPlayer& GetPlayer(RakNet::RakNetGUID raknetId)
 {
@@ -64,14 +66,13 @@ void ShowHeader()
 	std::cout << "RakNet RPG Server" << std::endl;
 	std::cout << std::endl;
 
-
-//	if (g_networkState == NS_WaitingPlayers)
-	//{
+	if (g_networkState == NS_WaitingPlayers)
+	{
 		for (unsigned int x = 1; x <= MAX_CONNECTIONS; x++)
 		{
 			std::string chosenClass = "WAITING";
 
-			if (RakNet::RakNetGUID::ToUint32(playersIDs[x - 1]) != NULL)
+			if (RakNet::RakNetGUID::ToUint32(playersIDs[x - 1]) > 0 ) // != NULL)
 			{
 				SPlayer& player = GetPlayer(playersIDs[x - 1]);
 				if (player.m_class != NULL)
@@ -84,7 +85,58 @@ void ShowHeader()
 				std::cout << "Player " << x << " WAITING..." << std::endl;
 			}
 		}
-	//}
+	}
+	else if ( g_networkState == NS_GameStarted  )
+	{
+		std::cout << "Game STARTED" << std::endl;
+		std::cout << std::endl;
+
+		for (unsigned int x = 1; x <= MAX_CONNECTIONS; x++)
+		{
+			SPlayer& player = GetPlayer(playersIDs[x - 1]);
+
+			std::cout << "Player " << player.m_number << " - " << CharacterClass::GetCharacterClassName(player.m_class);
+			switch (player.m_status)
+			{
+				case PS_Disconnected:
+					std::cout << " - DISCONNECTED";
+					break;
+				case PS_Dead:
+					std::cout << " - DEAD";
+					break;
+				default:
+					break;
+			} 
+			std::cout << std::endl;
+		}
+	}
+	else if ( g_networkState == NS_GameOver )
+	{
+		for (unsigned int x = 1; x <= MAX_CONNECTIONS; x++)
+		{
+			SPlayer& player = GetPlayer(playersIDs[x - 1]);
+
+			std::cout << "Player " << player.m_number << " - " << CharacterClass::GetCharacterClassName(player.m_class);
+			switch (player.m_status)
+			{
+				case PS_Winner:
+					std::cout << " - WINNER";
+					break;
+				case PS_Disconnected:
+					std::cout << " - DISCONNECTED";
+					break;
+				case PS_Dead:
+					std::cout << " - DEAD";
+					break;
+				default:
+					break;
+			}
+			std::cout << std::endl;
+		}
+
+		std::cout << std::endl;
+		std::cout << "GAME OVER" << std::endl;
+	}
 }
 
 std::string GetPlayerStats()
@@ -93,37 +145,104 @@ std::string GetPlayerStats()
 
 	ss << std::endl;
 
-		//player 1 - warrior - 100 hp
-		//player 2 - Cleric - 50 hp
-		//player 3 - disconnected
-
-		for (unsigned int x = 0; x < MAX_CONNECTIONS; x++)
+	for (unsigned int x = 0; x < MAX_CONNECTIONS; x++)
+	{
+		if (RakNet::RakNetGUID::ToUint32(playersIDs[x]) >0) //!= NULL)
 		{
-			if (RakNet::RakNetGUID::ToUint32(playersIDs[x]) != NULL)
+			SPlayer& player = GetPlayer(playersIDs[x]);
+			ss << "Player " << player.m_number << " - " << player.m_character->GetMyCharacterClassName() << " - ";
+					
+			switch (player.m_status)
 			{
-				SPlayer& player = GetPlayer(playersIDs[x]);
-				ss << "Player " << player.m_number << " - " << player.m_character->GetMyCharacterClassName() << " - " << player.m_character->m_health << " HP" << std::endl;
+				case PS_Connected:
+					ss << player.m_character->m_health << " HP";
+					break;
+				case PS_Winner:
+					ss << "WINNER";
+					break;
+				case PS_Disconnected:
+					ss << "DISCONNECTED";
+					break;
+				case PS_Dead:
+					ss << "DEAD";
+					break;
+				default:
+					break;
 			}
+			ss << std::endl;
 		}
+	}
 		
 	return ss.str();
 }
 
+bool IsGameOver()
+{
+	unsigned int validPlayerCount = 0;
+	unsigned int winner = 0;
+
+	std::stringstream ss;
+
+	ss << std::endl;
+
+	for (unsigned int x = 0; x < MAX_CONNECTIONS; x++)
+	{
+		SPlayer& player = GetPlayer(playersIDs[x]);
+
+		if ( player.m_status == PS_Connected )
+		{
+			validPlayerCount++;
+			winner = player.m_number;
+		}
+	}
+
+	if (validPlayerCount <= 1) // Game Over
+	{
+		g_networkState_mutex.lock();
+		g_networkState = NS_GameOver;
+		g_networkState_mutex.unlock();
+
+		SPlayer& player = GetPlayer(playersIDs[winner - 1]);
+		player.m_status = PS_Winner;
+
+		ShowHeader();
+
+		// Notify all player that game has finished
+		RakNet::BitStream writeBs;
+		writeBs.Write((RakNet::MessageID)ID_THEGAME_OVER);
+		std::string _status = GetPlayerStats();
+		RakNet::RakString status(_status.c_str());
+		writeBs.Write(status);
+		writeBs.Write(player.m_number);
+
+		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true));
+	}
+	return 0;
+}
 
 void OnLostConnection(RakNet::Packet* packet)
 {
-	std::cout << "Lost connection on Server" << std::endl;
-
 	SPlayer& lostPlayer = GetPlayer(packet->guid);
-	playersIDs[lostPlayer.m_number - 1] = (RakNet::RakNetGUID)0;
-	//numPlayersConnected--;
-	lostPlayer.SendName(RakNet::UNASSIGNED_SYSTEM_ADDRESS, true);
-	unsigned long keyVal = RakNet::RakNetGUID::ToUint32(packet->guid);
-	m_players.erase(keyVal);
+
+	if (g_networkState == NS_WaitingPlayers)
+	{
+		playersIDs[lostPlayer.m_number - 1] = (RakNet::RakNetGUID)0;
+
+		unsigned long keyVal = RakNet::RakNetGUID::ToUint32(packet->guid);
+		m_players.erase(keyVal);
+	}
+	else if (g_networkState == NS_GameStarted)
+	{
+		lostPlayer.m_status = PS_Disconnected;
+		if (lostPlayer.m_number == lastPlayerTurn)
+			isDefineTurn = true; // Transfer the turn to another player
+	}
+
 	ShowHeader();
+
+	IsGameOver();
 }
 
-//server
 void OnIncomingConnection(RakNet::Packet* packet)
 {
 	unsigned int availableSlot = 0;
@@ -136,8 +255,6 @@ void OnIncomingConnection(RakNet::Packet* packet)
 		}
 	}
 
-	//numPlayersConnected++;
-
 	SPlayer& newPlayer = SPlayer();
 	newPlayer.m_number = availableSlot + 1;
 	newPlayer.m_status = PS_Connected;
@@ -146,30 +263,11 @@ void OnIncomingConnection(RakNet::Packet* packet)
 	m_players.insert(std::make_pair(RakNet::RakNetGUID::ToUint32(packet->guid), newPlayer));
 	playersIDs[availableSlot] = packet->guid;
 
-	SPlayer& connectedPlayer = GetPlayer(packet->guid);
-	//ShowWaittingPlayers();
 	ShowHeader();
-	//std::cout << "Player " << numPlayersConnected << " connected. Class: " << CharacterClass::GetCharacterClassName(connectedPlayer.m_class) << std::endl;
-}
-
-
-
-//this is on the client side
-void DisplayPlayerReady(RakNet::Packet* packet)
-{
-	RakNet::BitStream bs(packet->data, packet->length, false);
-	RakNet::MessageID messageId;
-	bs.Read(messageId);
-	RakNet::RakString userName;
-	bs.Read(userName);
-
-	std::cout << userName.C_String() << " has joined" << std::endl;
 }
 
 bool CheckGameStart()
 {
-	bool isOk = true;
-
 	if (g_networkState == NS_WaitingPlayers)
 	{
 		if (m_players.size() < numPlayersRequired)
@@ -180,7 +278,6 @@ bool CheckGameStart()
 			SPlayer& player = it->second;
 			if (player.m_class == NULL)
 			{
-				//break;
 				return false;
 			}
 		}
@@ -192,13 +289,13 @@ bool CheckGameStart()
 		RakNet::RakString status(_status.c_str());
 		writeBs.Write(status);
 
-		//assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, g_serverAddress, true));
 		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true));
 		
 		g_networkState_mutex.lock();
 		g_networkState = NS_GameStarted;
 		g_networkState_mutex.unlock();
 
+		ShowHeader();
 	}
 }
 
@@ -241,49 +338,115 @@ void OnLobbyReady(RakNet::Packet* packet)
 
 	ShowHeader();
 
-	//notify all other connected players that this plyer has joined the game
-	for (std::map<unsigned long, SPlayer>::iterator it = m_players.begin(); it != m_players.end(); ++it)
-	{
-		//skip over the player who just joined
-		if (guid == it->first)
-		{
-			continue;
-		}
-
-		SPlayer& player = it->second;
-		player.SendName(packet->systemAddress, false);
-		/*RakNet::BitStream writeBs;
-		writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
-		RakNet::RakString name(player.m_name.c_str());
-		writeBs.Write(name);
-
-		//returns 0 when something is wrong
-		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));*/
-	}
-
 	RakNet::BitStream writeBs;
 	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
-//	RakNet::RakString name(player.m_name.c_str());
-	//writeBs.Write(name);
 	writeBs.Write(player.m_number);
 
 	//returns 0 when something is wrong
 	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));
 
-	/*RakNet::BitStream writeBs;
-	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
-	RakNet::RakString name(player.m_name.c_str());
-	writeBs.Write(name);
+	CheckGameStart();
+}
 
-	//returns 0 when something is wrong
-	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false));*/
-	//player.SendName(packet->systemAddress, true);
-	/*RakNet::BitStream writeBs;
-	writeBs.Write((RakNet::MessageID)ID_PLAYER_READY);
-	RakNet::RakString name(player.m_name.c_str());
-	writeBs.Write(name);
-	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, true));*/
+void ResolveAttack(RakNet::Packet *packet)
+{
+	std::stringstream ss;
 
+	SPlayer& player = GetPlayer(packet->guid);
+	unsigned int targetPlayerNum = 0;
+
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	bs.Read(targetPlayerNum);
+
+	SPlayer& targetPlayer = GetPlayer(playersIDs[targetPlayerNum - 1]);
+	
+	if (targetPlayer.m_status != PS_Connected)
+		return; // Target player was disconnected
+
+	unsigned int targetDefense = targetPlayer.m_character->GetAttribDefense();
+	if (targetPlayer.m_isDefending)
+	{
+		targetDefense += 5;
+		targetPlayer.m_isDefending = false;
+	}
+
+	ss << std::endl << "*" << std::endl;
+	ss << "Player " << player.m_number << " attacked player " << targetPlayer.m_number << " and ";
+
+	unsigned int toHit = Rolld20();
+	if (toHit >= targetDefense)
+	{
+		targetPlayer.m_character->m_health -= player.m_character->GetAttribDamage();
+		ss << "did  " << player.m_character->GetAttribDamage() << " points of damage." << std::endl;
+
+		// Check if target died
+		if (targetPlayer.m_character->m_health <= 0)
+		{
+			targetPlayer.m_character->m_health = 0;
+			targetPlayer.m_status = PS_Dead;
+
+			ss << "Player " << targetPlayer.m_number << " died. " << std::endl;
+		}
+	}
+	else
+	{
+		ss << "missed." << std::endl;
+	}
+
+	ss << "*" << std::endl;
+
+	lastPlayerAction = ss.str();
+
+	IsGameOver();
+}
+
+void ResolveDefend(RakNet::Packet *packet)
+{
+	std::stringstream ss;
+	unsigned int targetPlayerNum = 0;
+
+	SPlayer& player = GetPlayer(packet->guid);
+
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	bs.Read(targetPlayerNum);
+
+	player.m_isDefending = true;
+
+	ss << std::endl << "*" << std::endl;
+	ss << "Player " << player.m_number << " is defending. " << std::endl;
+	ss << "*" << std::endl;
+
+	lastPlayerAction = ss.str();
+}
+
+void ResolveHeal(RakNet::Packet *packet)
+{
+	std::stringstream ss;
+	unsigned int targetPlayerNum = 0;
+
+	SPlayer& player = GetPlayer(packet->guid);
+
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	bs.Read(targetPlayerNum);
+
+	unsigned int toHeal = Rolld20();
+	int maxHeal = player.m_character->GetAttribHealth() - player.m_character->m_health;
+
+	maxHeal = (toHeal > maxHeal ? maxHeal : toHeal);
+
+	player.m_character->m_health += maxHeal;
+	
+	ss << std::endl << "*" << std::endl;
+	ss << "Player " << player.m_number << " healed " << maxHeal << " points." << std::endl;
+	ss << "*" << std::endl;
+
+	lastPlayerAction = ss.str();
 }
 
 void ResolveTurn(RakNet::Packet *packet)
@@ -294,18 +457,15 @@ void ResolveTurn(RakNet::Packet *packet)
 	switch (packetIdentifier)
 	{
 		case ID_PLAYER_ATTACK:
-			//ResolveTurn(packet);
-			std::cout << "Player " << player.m_number << "Attacked" << std::endl;
+			ResolveAttack(packet);
 			break;
 
 		case ID_PLAYER_DEFEND:
-			//ResolveTurn(packet);
-			std::cout << "Player " << player.m_number << "Defend" << std::endl;
+			ResolveDefend(packet);
 			break;
 
 		case ID_PLAYER_HEAL:
-			//ResolveTurn(packet);
-			std::cout << "Player " << player.m_number << "heal" << std::endl;
+			ResolveHeal(packet);
 			break;
 
 		default:
@@ -313,13 +473,17 @@ void ResolveTurn(RakNet::Packet *packet)
 	}
 
 	isDefineTurn = true;
+
+	ShowHeader();
 }
 
+/*
 void InputHandler()
 {
 	while (isRunning)
 	{
 		char userInput[255];
+
 		if (g_networkState == NS_Init)
 		{
 			g_networkState_mutex.lock();
@@ -338,6 +502,7 @@ void InputHandler()
 		std::this_thread::sleep_for(std::chrono::microseconds(1));
 	}
 }
+*/
 
 bool HandleLowLevelPackets(RakNet::Packet* packet)
 {
@@ -417,10 +582,6 @@ void PacketHandler()
 						OnLobbyReady(packet);
 						break;
 
-					case ID_PLAYER_READY:
-						DisplayPlayerReady(packet);
-						break;
-
 					case ID_PLAYER_ATTACK:
 					case ID_PLAYER_DEFEND:
 					case ID_PLAYER_HEAL:
@@ -441,10 +602,8 @@ int main()
 {
 	g_rakPeerInterface = RakNet::RakPeerInterface::GetInstance();
 
-	std::thread inputHandler(InputHandler);
+	//std::thread inputHandler(InputHandler);
 	std::thread packetHandler(PacketHandler);
-
-	unsigned int lastPlayerTurn = 0;
 
 	while (isRunning)
 	{
@@ -453,7 +612,6 @@ int main()
 			g_networkState_mutex.lock();
 			g_networkState = NS_PendingStart;
 			g_networkState_mutex.unlock();
-
 		}
 		else if (g_networkState == NS_PendingStart)
 		{
@@ -467,11 +625,6 @@ int main()
 			if (isSuccess)
 			{
 				g_rakPeerInterface->SetMaximumIncomingConnections(MAX_CONNECTIONS);
-				/*std::cout << "server started" << std::endl;
-				g_networkState_mutex.lock();
-				g_networkState = NS_Started;
-				g_networkState_mutex.unlock();
-				*/
 				g_networkState_mutex.lock();
 				g_networkState = NS_WaitingPlayers;
 				g_networkState_mutex.unlock();
@@ -483,7 +636,6 @@ int main()
 		}
 		else if (g_networkState == NS_WaitingPlayers)
 		{
-			CheckGameStart();
 		}
 		else if (g_networkState == NS_GameStarted)
 		{
@@ -494,7 +646,7 @@ int main()
 					lastPlayerTurn = 1;
 
 				// Get a valid player
-				for ( unsigned int x = lastPlayerTurn - 1; x < playersIDs->size(); x++ )
+				for ( unsigned int x = lastPlayerTurn - 1; x < MAX_CONNECTIONS; x++ )
 				{
 					SPlayer& player = GetPlayer(playersIDs[x]);
 					if (player.m_status == PS_Connected)
@@ -504,22 +656,46 @@ int main()
 					}
 				}
 
-				// Broadcast player's number turn
+				/* Broadcast player's number turn && last player's action */
 				RakNet::BitStream writeBs;
 				writeBs.Write((RakNet::MessageID)ID_PLAYER_TURN);
 				writeBs.Write(lastPlayerTurn);
+				
 				std::string _status = GetPlayerStats();
 				RakNet::RakString status(_status.c_str());
 				writeBs.Write(status);
+				RakNet::RakString playerAction(lastPlayerAction.c_str());
+				writeBs.Write(playerAction);
+
 				//returns 0 when something is wrong
 				assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, RakNet::UNASSIGNED_SYSTEM_ADDRESS, true));
 
-				// Player receives a turn start
+				/* Player receives a turn start */
 				SPlayer& player = GetPlayer(playersIDs[lastPlayerTurn - 1]);
 				RakNet::BitStream writeBs2;
 				writeBs2.Write((RakNet::MessageID)ID_YOUR_TURN);
-				RakNet::RakString name("123");
-				writeBs2.Write(name);
+
+				// Get valid targets
+				unsigned int numValidTargets = 0;
+				std::vector<unsigned int> validTargets;
+
+				for (unsigned int x = 0; x < MAX_CONNECTIONS; x++)
+				{
+					SPlayer& player = GetPlayer(playersIDs[x]);
+					if (player.m_status == PS_Connected)
+					{
+						if (player.m_number != lastPlayerTurn)
+						{
+							numValidTargets++;
+							validTargets.push_back(player.m_number);
+						}
+					}
+				}
+
+				writeBs2.Write(numValidTargets);
+				for (std::vector<unsigned int>::iterator it = validTargets.begin(); it != validTargets.end(); ++it)
+					writeBs2.Write(*it);
+
 				//returns 0 when something is wrong
 				assert(g_rakPeerInterface->Send(&writeBs2, HIGH_PRIORITY, RELIABLE_ORDERED, 0, player.m_address, false));
 

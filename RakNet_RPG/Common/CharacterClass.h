@@ -28,37 +28,31 @@ class CharacterClass
 {
 	public:
 		EPlayerClass m_class;
-		unsigned int m_number;
 		EPlayerAttribQuality m_healthQuality;
-		unsigned int m_health;
+		int m_health;
 		EPlayerAttribQuality m_damageQuality;
 		EPlayerAttribQuality m_defenseQuality;
-
 
 	public:
 		CharacterClass();
 		~CharacterClass();
 
-		//virtual void LoadContent();
-		//virtual void UnloadContent();
-		//virtual void Update();
-		//virtual void Draw(sf::RenderWindow &window);
-
 		static std::string GetCharacterClassName(const EPlayerClass className);
+
 		virtual std::string GetMyCharacterClassName();
-		unsigned int GetAttribHealth(const EPlayerAttribQuality quality);
-		unsigned int GetAttribDamage(const EPlayerAttribQuality quality);
-		unsigned int GetAttribDefense(const EPlayerAttribQuality quality);
+		unsigned int GetAttribHealth();
+		unsigned int GetAttribDamage();
+		unsigned int GetAttribDefense();
 };
 
 CharacterClass::CharacterClass() {}
 CharacterClass::~CharacterClass() {}
 
-inline unsigned int CharacterClass::GetAttribDamage(const EPlayerAttribQuality quality)
+inline unsigned int CharacterClass::GetAttribDamage()
 {
 	unsigned int result = 0;
 
-	switch (quality)
+	switch (m_damageQuality)
 	{
 		case Low:
 			result = 5;
@@ -72,6 +66,7 @@ inline unsigned int CharacterClass::GetAttribDamage(const EPlayerAttribQuality q
 		default:
 			break;
 	}
+	return result;
 }
 
 inline std::string CharacterClass::GetCharacterClassName(const EPlayerClass className)
@@ -101,20 +96,20 @@ inline std::string CharacterClass::GetMyCharacterClassName()
 	return "Base Class";
 }
 
-inline unsigned int CharacterClass::GetAttribHealth(const EPlayerAttribQuality quality)
+inline unsigned int CharacterClass::GetAttribHealth()
 {
 	unsigned int result = 0;
 
-	switch (quality)
+	switch (m_healthQuality)
 	{
 		case Low:
-			result = 50;
+			result = 40;
 			break;
 		case Medium:
-			result = 75;
+			result = 60;
 			break;
 		case High:
-			result = 100;
+			result = 80;
 			break;
 		default:
 			break;
@@ -122,22 +117,23 @@ inline unsigned int CharacterClass::GetAttribHealth(const EPlayerAttribQuality q
 	return result;
 }
 
-inline unsigned int CharacterClass::GetAttribDefense(const EPlayerAttribQuality quality)
+inline unsigned int CharacterClass::GetAttribDefense()
 {
 	unsigned int result = 0;
 
-	switch (quality)
+	switch (m_defenseQuality)
 	{
-	case Low:
-		result = 5;
-		break;
-	case Medium:
-		result = 10;
-		break;
-	case High:
-		result = 15;
-		break;
-	default:
-		break;
+		case Low:
+			result = 5;
+			break;
+		case Medium:
+			result = 10;
+			break;
+		case High:
+			result = 15;
+			break;
+		default:
+			break;
 	}
+	return result;
 }

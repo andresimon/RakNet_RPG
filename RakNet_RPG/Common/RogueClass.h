@@ -9,8 +9,8 @@ class RogueClass : public CharacterClass
 		RogueClass(unsigned int const playerNum);
 		~RogueClass();
 
-	std::string GetMyCharacterClassName() override;
-	static EPlayerAction DoTurn();
+		std::string GetMyCharacterClassName() override;
+		static EPlayerAction DoTurn();
 
 	private:
 
@@ -18,11 +18,10 @@ class RogueClass : public CharacterClass
 
 inline RogueClass::RogueClass(unsigned int const playerNum)
 {
-	m_number = playerNum;
 	m_class = Rogue;
 
 	m_healthQuality = Low;
-	m_health = GetAttribHealth(m_healthQuality);
+	m_health = GetAttribHealth();
 
 	m_damageQuality = High;
 	m_defenseQuality = High;
@@ -34,7 +33,7 @@ RogueClass::~RogueClass()
 
 inline std::string RogueClass::GetMyCharacterClassName()
 {
-	return "Rogue";
+	return "Rogue  ";
 }
 
 inline EPlayerAction RogueClass::DoTurn()

@@ -8,6 +8,8 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <vector>
+#include <algorithm> // to use find()
 
 #include "Common.h"
 #include "CharacterClass.h"
@@ -41,29 +43,15 @@ SPlayer& GetPlayer(RakNet::RakNetGUID raknetId)
 
 void OnLostConnection(RakNet::Packet* packet)
 {
-	if (g_networkState < NS_GameStarted)
-	{
-		cls();
+	cls();
 
-		std::cout << "Disconnected from RakNet Server." << std::endl;
-	}
-	else
-	{
-		std::cout << "Disconnected after GAME START." << std::endl;
-
-	}
-	/*
-	std::cout << "antes ";
-	SPlayer& lostPlayer = GetPlayer(packet->guid);
-	std::cout << "depoi ";
-
-	lostPlayer.SendName(RakNet::UNASSIGNED_SYSTEM_ADDRESS, true);
-	unsigned long keyVal = RakNet::RakNetGUID::ToUint32(packet->guid);
-	m_players.erase(keyVal);*/
+	std::cout << "Disconnected from RakNet RPG Server." << std::endl;
 }
 
 void ShowHeader(RakNet::Packet* packet)
-{
+{ 
+	cls();
+
 	std::cout << "RakNet RPG" << std::endl;
 	std::cout << "You are connected at RakNet RPG Server on " << packet->systemAddress.ToString(true) << std::endl;
 
@@ -74,6 +62,7 @@ void ShowHeader(RakNet::Packet* packet)
 	{
 		std::cout << std::endl;
 		std::cout << "Waiting for other players to join " << std::endl;
+		std::cout << std::endl;
 	}
 
 }
@@ -81,6 +70,7 @@ void ShowHeader(RakNet::Packet* packet)
 void ShowPlayersTurn(RakNet::Packet* packet)
 {
 	unsigned int playerNum;
+	std::string lastPlayerAction;
 
 	RakNet::BitStream bs(packet->data, packet->length, false);
 	RakNet::MessageID messageId;
@@ -88,12 +78,20 @@ void ShowPlayersTurn(RakNet::Packet* packet)
 	bs.Read(playerNum);
 	RakNet::RakString status;
 	bs.Read(status);
+	RakNet::RakString _lastPlayerAction;
+	bs.Read(_lastPlayerAction);
+	lastPlayerAction = _lastPlayerAction.C_String();
 
-	cls();
 	ShowHeader(packet);
+
 	std::cout << std::endl;
-	std::cout << "PLAYER " << playerNum << " TURN" << std::endl;
+
+	if (!lastPlayerAction.empty())
+		std::cout << lastPlayerAction ;
+
 	std::cout << status.C_String() << std::endl;
+
+	std::cout << "PLAYER " << playerNum << " TURN" << std::endl;
 }
 
 EPlayerClass SelectClass()
@@ -109,29 +107,14 @@ EPlayerClass SelectClass()
 
 	char option = ' ';
 	unsigned int iOption = 0;
-	bool isOk = false;
 
 	while ( iOption < 1 || iOption > 3 )
 	{
 		iOption = 0;
 		option = _getch();
 
-		if (toupper(option) == 'X')
-		{
-			g_rakPeerInterface->CloseConnection(g_serverAddress, true, RELIABLE_ORDERED, HIGH_PRIORITY);
-			exit(0);
-			//return EPlayerClass_ERROR;
-			//break;
-		}
 		iOption = option - '0';
 	}
-
-	/*void RakNet::RakPeer::CloseConnection(const AddressOrGUID  	target,
-		bool  	sendDisconnectionNotification,
-		unsigned char  	orderingChannel = 0,
-		PacketPriority  	disconnectionNotificationPriority = LOW_PRIORITY
-	)
-		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, packet->systemAddress, false)); */
 
 	switch (iOption)
 	{
@@ -156,11 +139,9 @@ EPlayerClass SelectClass()
 	return selectedClass;
 }
 
-//client
 void OnConnectionAccepted(RakNet::Packet* packet)
 {
 	cls();
-
 	ShowHeader(packet);
 
 	g_networkState_mutex.lock();
@@ -169,7 +150,6 @@ void OnConnectionAccepted(RakNet::Packet* packet)
 	g_serverAddress = packet->systemAddress;
 }
 
-//this is on the client side
 void SetPlayerReady(RakNet::Packet* packet)
 {
 	RakNet::BitStream bs(packet->data, packet->length, false);
@@ -177,9 +157,7 @@ void SetPlayerReady(RakNet::Packet* packet)
 	bs.Read(messageId);
 	bs.Read(playerNumber);
 
-	cls();
 	ShowHeader(packet);
-
 }
 
 void OnGameStarted(RakNet::Packet* packet)
@@ -187,6 +165,33 @@ void OnGameStarted(RakNet::Packet* packet)
 	g_networkState_mutex.lock();
 	g_networkState = NS_GameStarted;
 	g_networkState_mutex.unlock();
+}
+
+void OnGameOver(RakNet::Packet* packet)
+{
+	unsigned int winner;
+	std:
+
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	RakNet::RakString status;
+	bs.Read(status);
+	bs.Read(winner);
+
+	ShowHeader(packet);
+
+	std::cout << status.C_String() << std::endl;
+
+	std::cout << std::endl;
+	std::cout << "GAME OVER" << std::endl;
+	std::cout << std::endl;
+	std::cout << "Player: " << winner << " has Won." << std::endl;
+
+	g_networkState_mutex.lock();
+	g_networkState = NS_GameOver;
+	g_networkState_mutex.unlock();
+
 }
 
 unsigned char GetPacketIdentifier(RakNet::Packet *packet)
@@ -211,14 +216,7 @@ void InputHandler()
 
 		char userInput[255];
 
-		if (g_networkState == NS_Init)
-		{
-			g_networkState_mutex.lock();
-			g_networkState = NS_PendingStart;
-			g_networkState_mutex.unlock();
-
-		}
-		else if (g_networkState == NS_Lobby)
+		if (g_networkState == NS_Lobby)
 		{
 			assert(strcmp(userInput, "quit"));
 
@@ -237,7 +235,7 @@ void InputHandler()
 
 				//returns 0 when something is wrong
 				assert(g_rakPeerInterface->Send(&bs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, g_serverAddress, false));
-				
+
 				g_networkState_mutex.lock();
 				g_networkState = NS_WaitingPlayers;
 				g_networkState_mutex.unlock();
@@ -255,12 +253,53 @@ void InputHandler()
 	}
 }
 
+unsigned int ChooseTarget(RakNet::Packet* packet)
+{
+	unsigned int numValidTargets = 0;
+	std::vector<unsigned int> validTargets;
+	
+	RakNet::BitStream bs(packet->data, packet->length, false);
+	RakNet::MessageID messageId;
+	bs.Read(messageId);
+	bs.Read(numValidTargets);
+
+	// Get valid targets
+	for (unsigned int x = 0; x < numValidTargets; x++)
+	{
+		unsigned int playerNum;
+		bs.Read(playerNum);
+		validTargets.push_back(playerNum);
+	}
+
+	std::cout << "Choose the target player to attack: ";
+	for (std::vector<unsigned int>::iterator it = validTargets.begin(); it != validTargets.end(); ++it)
+		std::cout << *it << " ";
+	std::cout << std::endl;
+
+	char option = ' ';
+	unsigned int iOption = 0;
+
+	while (true)
+	{
+		iOption = 0;
+		option = _getch();
+		iOption = option - '0';
+
+		if ( std::find(validTargets.begin(), validTargets.end(), iOption) != validTargets.end() )
+			break;
+	}
+
+	return iOption;
+}
+
 void OnPlayerTurn(RakNet::Packet* packet)
 {
 	EPlayerAction action;
 	RakNet::MessageID messageID;
 
-	std::cout << "ITS MY TURN NOW" << std::endl;
+	unsigned int targetPlayer = 0;
+
+	std::cout << std::endl << "ITS YOUR TURN NOW" << std::endl;
 
 	switch (playerClass)
 	{
@@ -285,27 +324,28 @@ void OnPlayerTurn(RakNet::Packet* packet)
 	switch (action)
 	{
 		case Attack:
+			targetPlayer = ChooseTarget(packet);
 			messageID = ID_PLAYER_ATTACK;
 			break;
+
 		case Defend:
 			messageID = ID_PLAYER_DEFEND;
 			break;
+
 		case Heal:
 			messageID = ID_PLAYER_HEAL;
 			break;
+
 		default:
 			break;
 	}
 
 	RakNet::BitStream writeBs;
 	writeBs.Write((RakNet::MessageID)messageID);
-	//RakNet::RakString name(m_name.c_str());
-	//writeBs.Write(name);
+	writeBs.Write(targetPlayer);
 
 	//returns 0 when something is wrong
 	assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, g_serverAddress, false));
-	
-	std::cout << "TURN ENDS" << std::endl;
 };
 
 bool HandleLowLevelPackets(RakNet::Packet* packet)
@@ -313,13 +353,14 @@ bool HandleLowLevelPackets(RakNet::Packet* packet)
 	bool isHandled = true;
 	// We got a packet, get the identifier with our handy function
 	unsigned char packetIdentifier = GetPacketIdentifier(packet);
-
+	char g;
 	// Check if this is a network message packet
 	switch (packetIdentifier)
 	{
 	case ID_DISCONNECTION_NOTIFICATION:
 		// Connection lost normally
 		printf("ID_DISCONNECTION_NOTIFICATION\n");
+		 g = _getch();
 		break;
 	case ID_ALREADY_CONNECTED:
 		// Connection lost normally
@@ -330,9 +371,13 @@ bool HandleLowLevelPackets(RakNet::Packet* packet)
 		break;
 	case ID_REMOTE_DISCONNECTION_NOTIFICATION: // Server telling the clients of another client disconnecting gracefully.  You can manually broadcast this in a peer to peer enviroment if you want.
 		printf("ID_REMOTE_DISCONNECTION_NOTIFICATION\n");
+		g = _getch();
+
 		break;
 	case ID_REMOTE_CONNECTION_LOST: // Server telling the clients of another client disconnecting forcefully.  You can manually broadcast this in a peer to peer enviroment if you want.
 		printf("ID_REMOTE_CONNECTION_LOST\n");
+		g = _getch();
+
 		break;
 	case ID_CONNECTION_ATTEMPT_FAILED:
 		printf("Connection attempt failed\n");
@@ -342,10 +387,9 @@ bool HandleLowLevelPackets(RakNet::Packet* packet)
 		// A real app should tell the user
 		printf("ID_NO_FREE_INCOMING_CONNECTIONS\n");
 		break;
-
+		//@
 	case ID_CONNECTION_LOST:
-		// Couldn't deliver a reliable packet - i.e. the other system was abnormally
-		// terminated
+		// Couldn't deliver a reliable packet - i.e. the other system was abnormally terminated
 		printf("ID_CONNECTION_LOST\n");
 		OnLostConnection(packet);
 		break;
@@ -395,6 +439,11 @@ void PacketHandler()
 					case ID_YOUR_TURN:
 						OnPlayerTurn(packet);
 						break;
+
+					case ID_THEGAME_OVER:
+						OnGameOver(packet);
+						break;
+
 					default:
 						break;
 				}
@@ -415,6 +464,13 @@ int main()
 
 	while (isRunning)
 	{
+		if (g_networkState == NS_Init)
+		{
+			g_networkState_mutex.lock();
+			g_networkState = NS_PendingStart;
+			g_networkState_mutex.unlock();
+
+		}else
 		if (g_networkState == NS_PendingStart)
 		{
 			//client

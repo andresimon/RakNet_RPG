@@ -3,8 +3,10 @@
 #include "MessageIdentifiers.h"
 #include "RakPeerInterface.h"
 
+#include <cstdlib>
+#include <ctime>
+
 #include "CharacterClass.h"
-#include "WarriorClass.h"
 
 enum NetworkState
 {
@@ -15,6 +17,7 @@ enum NetworkState
 	NS_Lobby,
 	NS_WaitingPlayers,
 	NS_GameStarted,
+	NS_GameOver,
 };
 
 enum PlayerStatus
@@ -22,7 +25,8 @@ enum PlayerStatus
 	PS_Connected = 0,
 	PS_Playing,
 	PS_Dead,
-	PS_Disconnected
+	PS_Disconnected,
+	PS_Winner
 };
 
 enum
@@ -35,6 +39,8 @@ enum
 	ID_PLAYER_ATTACK,
 	ID_PLAYER_DEFEND,
 	ID_PLAYER_HEAL,
+	ID_THEGAME_OVER,
+
 };
 
 struct SPlayer
@@ -42,11 +48,10 @@ struct SPlayer
 	unsigned int m_number;
 	RakNet::SystemAddress m_address;
 
-	//unsigned int m_health;
 	EPlayerClass m_class;
 	PlayerStatus m_status;
 	CharacterClass* m_character;
-
+	bool m_isDefending;
 
 	//function to send a packet with name/health/class etc
 	void SendName(RakNet::SystemAddress systemAddress, bool isBroadcast)
@@ -60,6 +65,7 @@ struct SPlayer
 //		assert(g_rakPeerInterface->Send(&writeBs, HIGH_PRIORITY, RELIABLE_ORDERED, 0, systemAddress, isBroadcast));
 	}
 };
+
 void cls() //windows h function to replace screen with nulls
 {
 	DWORD n;
@@ -73,4 +79,13 @@ void cls() //windows h function to replace screen with nulls
 	GetConsoleScreenBufferInfo(h, &csbi);
 	FillConsoleOutputAttribute(h, csbi.wAttributes, size, coord, &n);
 	SetConsoleCursorPosition(h, coord);
+}
+
+unsigned int Rolld20()
+{
+	srand((int)time(0));
+
+	int r = (rand() % 20) + 1;
+
+	return r;
 }

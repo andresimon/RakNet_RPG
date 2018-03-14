@@ -18,11 +18,10 @@ class ClericClass : public CharacterClass
 
 inline ClericClass::ClericClass(unsigned int const playerNum)
 {
-	m_number = playerNum;
 	m_class = Cleric;
 
 	m_healthQuality = Medium;
-	m_health = GetAttribHealth(m_healthQuality);
+	m_health = GetAttribHealth();
 
 	m_damageQuality = Low;
 	m_defenseQuality = Medium;
@@ -34,7 +33,7 @@ ClericClass::~ClericClass()
 
 inline std::string ClericClass::GetMyCharacterClassName()
 {
-	return "Cleric";
+	return "Cleric ";
 }
 
 inline EPlayerAction ClericClass::DoTurn()
